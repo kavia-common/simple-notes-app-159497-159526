@@ -1,0 +1,514 @@
+---
+/**
+ * NotesApp.astro
+ * Minimalistic notes UI with sidebar list and main editor.
+ * Uses an API abstraction that talks to a backend over HTTP when PUBLIC_API_BASE_URL is set.
+ * Otherwise, it transparently falls back to localStorage so the UI remains usable in dev.
+ */
+---
+
+<section class="app-shell">
+  <aside class="sidebar">
+    <header class="sidebar-header">
+      <h1 class="brand">
+        <span class="dot" aria-hidden="true"></span>
+        Notes
+      </h1>
+      <button id="new-note" class="btn btn-primary" type="button" title="Create a new note">New</button>
+    </header>
+
+    <div class="search-row">
+      <input id="search" class="input" type="search" placeholder="Search notes..." aria-label="Search notes" />
+    </div>
+
+    <ul id="notes-list" class="notes-list" aria-label="Notes list">
+      <!-- Populated by script -->
+    </ul>
+  </aside>
+
+  <main class="editor">
+    <div id="env-warning" class="env-warning" hidden>
+      <strong>Backend not configured.</strong>
+      Set PUBLIC_API_BASE_URL in .env to enable server-backed storage. Using localStorage for now.
+    </div>
+
+    <div class="editor-toolbar">
+      <button id="save-note" class="btn btn-primary" type="button" title="Save note">Save</button>
+      <button id="delete-note" class="btn btn-danger" type="button" title="Delete note">Delete</button>
+      <span id="status" class="status" role="status" aria-live="polite"></span>
+    </div>
+
+    <form id="note-form" class="note-form" onsubmit="return false;">
+      <input id="note-title" class="title" type="text" placeholder="Untitled" aria-label="Note title" />
+      <textarea id="note-content" class="content" placeholder="Start writing..." aria-label="Note content"></textarea>
+    </form>
+
+    <p class="hint">
+      Tip: Your changes are local until you press Save. Use the sidebar to switch notes.
+    </p>
+  </main>
+</section>
+
+<script type="module">
+  import { createNotesApi } from '../lib/api.ts';
+
+  const api = createNotesApi();
+  const state = {
+    notes: [],
+    filteredNotes: [],
+    selectedId: null,
+    dirty: false,
+  };
+
+  // UI elements
+  const el = {
+    notesList: null,
+    newNoteBtn: null,
+    saveNoteBtn: null,
+    deleteNoteBtn: null,
+    form: null,
+    title: null,
+    content: null,
+    status: null,
+    search: null,
+    envWarning: null,
+  };
+
+  function qs(id) { return document.getElementById(id); }
+
+  function setStatus(message, kind = 'info', timeout = 1800) {
+    if (!el.status) return;
+    el.status.textContent = message || '';
+    el.status.className = 'status ' + (kind || 'info');
+    if (timeout) {
+      setTimeout(() => {
+        el.status.textContent = '';
+        el.status.className = 'status';
+      }, timeout);
+    }
+  }
+
+  function renderList() {
+    if (!el.notesList) return;
+    const items = state.filteredNotes.length ? state.filteredNotes : state.notes;
+    el.notesList.innerHTML = '';
+    if (!items.length) {
+      const empty = document.createElement('li');
+      empty.className = 'empty';
+      empty.textContent = 'No notes yet. Create your first note!';
+      el.notesList.appendChild(empty);
+      return;
+    }
+    for (const n of items) {
+      const li = document.createElement('li');
+      li.className = 'note-item' + (n.id === state.selectedId ? ' selected' : '');
+      li.tabIndex = 0;
+      li.dataset.id = String(n.id);
+      const title = n.title?.trim() || 'Untitled';
+      const preview = (n.content || '').trim().slice(0, 80);
+      li.innerHTML = \`
+        <div class="note-title">\${title}</div>
+        <div class="note-preview">\${preview}</div>
+      \`;
+      li.addEventListener('click', () => selectNote(n.id));
+      li.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          selectNote(n.id);
+        }
+      });
+      el.notesList.appendChild(li);
+    }
+  }
+
+  function renderEditor(note) {
+    if (!el.title || !el.content) return;
+    el.title.value = note?.title || '';
+    el.content.value = note?.content || '';
+    state.dirty = false;
+    toggleDirtyIndicator(false);
+  }
+
+  function getSelectedNote() {
+    return state.notes.find(n => n.id === state.selectedId) || null;
+  }
+
+  function toggleDirtyIndicator(on) {
+    const editor = document.querySelector('.editor');
+    if (on) {
+      editor?.classList.add('dirty');
+    } else {
+      editor?.classList.remove('dirty');
+    }
+  }
+
+  function markDirty() {
+    state.dirty = true;
+    toggleDirtyIndicator(true);
+  }
+
+  async function refreshNotes(selectId = null) {
+    try {
+      const notes = await api.listNotes();
+      state.notes = notes.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      state.filteredNotes = [];
+      renderList();
+      if (selectId) {
+        selectNote(selectId);
+      } else if (state.notes.length) {
+        selectNote(state.notes[0].id);
+      } else {
+        state.selectedId = null;
+        renderEditor({ title: '', content: '' });
+      }
+    } catch (err) {
+      console.error(err);
+      setStatus('Failed to load notes', 'error', 2500);
+    }
+  }
+
+  async function selectNote(id) {
+    if (state.dirty) {
+      const proceed = confirm('You have unsaved changes. Discard and switch?');
+      if (!proceed) return;
+    }
+    try {
+      state.selectedId = id;
+      const note = state.notes.find(n => n.id === id) || await api.getNote(id);
+      renderEditor(note);
+      renderList();
+    } catch (err) {
+      console.error(err);
+      setStatus('Failed to open note', 'error', 2500);
+    }
+  }
+
+  async function onSave() {
+    try {
+      const title = el.title.value.trim();
+      const content = el.content.value;
+      const selected = getSelectedNote();
+
+      if (!selected) {
+        // new note
+        const created = await api.createNote({ title, content });
+        setStatus('Note created', 'success');
+        await refreshNotes(created.id);
+      } else {
+        const updated = await api.updateNote(selected.id, { title, content });
+        setStatus('Saved', 'success');
+        await refreshNotes(updated.id);
+      }
+    } catch (err) {
+      console.error(err);
+      setStatus('Save failed', 'error', 2500);
+    }
+  }
+
+  async function onDelete() {
+    const selected = getSelectedNote();
+    if (!selected) {
+      setStatus('Nothing to delete', 'info');
+      return;
+    }
+    const ok = confirm('Delete this note? This cannot be undone.');
+    if (!ok) return;
+    try {
+      await api.deleteNote(selected.id);
+      setStatus('Deleted', 'success');
+      await refreshNotes();
+    } catch (err) {
+      console.error(err);
+      setStatus('Delete failed', 'error', 2500);
+    }
+  }
+
+  function onNew() {
+    if (state.dirty) {
+      const proceed = confirm('You have unsaved changes. Discard and create new?');
+      if (!proceed) return;
+    }
+    state.selectedId = null;
+    renderEditor({ title: '', content: '' });
+    renderList();
+  }
+
+  function onSearch() {
+    const term = el.search.value.toLowerCase().trim();
+    if (!term) {
+      state.filteredNotes = [];
+    } else {
+      state.filteredNotes = state.notes.filter(n =>
+        (n.title || '').toLowerCase().includes(term) ||
+        (n.content || '').toLowerCase().includes(term)
+      );
+    }
+    renderList();
+  }
+
+  function init() {
+    el.notesList = document.getElementById('notes-list');
+    el.newNoteBtn = qs('new-note');
+    el.saveNoteBtn = qs('save-note');
+    el.deleteNoteBtn = qs('delete-note');
+    el.form = qs('note-form');
+    el.title = qs('note-title');
+    el.content = qs('note-content');
+    el.status = qs('status');
+    el.search = qs('search');
+    el.envWarning = qs('env-warning');
+
+    // Show environment warning when using localStorage service
+    if (api.mode === 'local') {
+      el.envWarning.hidden = false;
+    }
+
+    el.newNoteBtn.addEventListener('click', onNew);
+    el.saveNoteBtn.addEventListener('click', onSave);
+    el.deleteNoteBtn.addEventListener('click', onDelete);
+    el.title.addEventListener('input', markDirty);
+    el.content.addEventListener('input', markDirty);
+    el.search.addEventListener('input', onSearch);
+
+    refreshNotes();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+</script>
+
+<style>
+  .app-shell {
+    display: grid;
+    grid-template-columns: minmax(260px, var(--sidebar-width)) 1fr;
+    height: calc(100dvh - 0px);
+  }
+
+  .sidebar {
+    border-right: 1px solid var(--border-color);
+    padding: 16px;
+    background: var(--card-bg);
+  }
+
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 18px;
+    margin: 0;
+  }
+
+  .brand .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: linear-gradient(120deg, var(--color-primary), var(--color-accent));
+    display: inline-block;
+    box-shadow: 0 0 0 3px color-mix(in lab, var(--color-primary) 10%, transparent);
+  }
+
+  .search-row {
+    margin: 12px 0;
+  }
+
+  .input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-color);
+    color: var(--text-color);
+    outline: none;
+    box-shadow: 0 1px 0 0 var(--shadow-color);
+  }
+  .input:focus {
+    border-color: color-mix(in lab, var(--color-primary) 45%, var(--border-color));
+    box-shadow: 0 0 0 3px color-mix(in lab, var(--color-primary) 18%, transparent);
+  }
+
+  .notes-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    overflow: auto;
+    max-height: calc(100dvh - 150px);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .notes-list .empty {
+    color: var(--text-secondary);
+    padding: 8px;
+  }
+
+  .note-item {
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-color);
+    cursor: pointer;
+    box-shadow: 0 1px 0 var(--shadow-color);
+    transition: transform 0.04s ease, background 0.15s ease, border-color 0.15s ease;
+    outline: none;
+  }
+  .note-item:hover {
+    background: var(--card-hover-bg);
+  }
+  .note-item:focus-visible {
+    border-color: color-mix(in lab, var(--color-primary) 45%, var(--border-color));
+    box-shadow: 0 0 0 3px color-mix(in lab, var(--color-primary) 18%, transparent);
+  }
+
+  .note-item.selected {
+    border-color: color-mix(in lab, var(--color-primary) 50%, var(--border-color));
+    background: color-mix(in lab, var(--color-primary) 5%, var(--bg-color));
+  }
+
+  .note-title {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 2px;
+  }
+  .note-preview {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .editor {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    min-height: 100dvh;
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .editor.dirty .title,
+  .editor.dirty .content {
+    border-color: color-mix(in lab, var(--color-accent) 60%, var(--border-color));
+    box-shadow: 0 0 0 3px color-mix(in lab, var(--color-accent) 20%, transparent);
+  }
+
+  .env-warning {
+    border: 1px dashed color-mix(in lab, var(--color-secondary) 35%, var(--border-color));
+    background: color-mix(in lab, var(--color-secondary) 6%, var(--bg-color));
+    color: var(--text-secondary);
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+  }
+
+  .editor-toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .status {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .status.success { color: color-mix(in lab, var(--color-primary) 60%, var(--text-secondary)); }
+  .status.error { color: #ef4444; }
+
+  .note-form {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    gap: 10px;
+    min-height: 0;
+  }
+
+  .title {
+    font-size: 18px;
+    font-weight: 600;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-color);
+    outline: none;
+  }
+  .title:focus {
+    border-color: color-mix(in lab, var(--color-primary) 45%, var(--border-color));
+    box-shadow: 0 0 0 3px color-mix(in lab, var(--color-primary) 18%, transparent);
+  }
+
+  .content {
+    min-height: 300px;
+    resize: none;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-color);
+    outline: none;
+    line-height: 1.45;
+  }
+  .content:focus {
+    border-color: color-mix(in lab, var(--color-primary) 45%, var(--border-color));
+    box-shadow: 0 0 0 3px color-mix(in lab, var(--color-primary) 18%, transparent);
+  }
+
+  .hint {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .btn {
+    border: 1px solid var(--border-color);
+    background: var(--bg-color);
+    color: var(--text-color);
+    border-radius: 999px;
+    padding: 8px 14px;
+    cursor: pointer;
+    box-shadow: 0 1px 0 var(--shadow-color);
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.04s ease;
+  }
+  .btn:hover {
+    background: var(--card-hover-bg);
+    transform: translateY(-1px);
+  }
+  .btn-primary {
+    color: white;
+    background: var(--color-primary);
+    border-color: color-mix(in lab, var(--color-primary) 60%, var(--border-color));
+  }
+  .btn-primary:hover {
+    background: color-mix(in lab, var(--color-primary) 85%, black 0%);
+  }
+  .btn-danger {
+    color: white;
+    background: #ef4444;
+    border-color: color-mix(in lab, #ef4444 60%, var(--border-color));
+  }
+  .btn-danger:hover {
+    background: #dc2626;
+  }
+
+  @media (max-width: 900px) {
+    .app-shell {
+      grid-template-columns: 1fr;
+    }
+    .sidebar {
+      border-right: 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .notes-list {
+      max-height: 220px;
+    }
+  }
+</style>

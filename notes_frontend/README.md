@@ -1,47 +1,70 @@
-# Astro Starter Kit: Minimal
+# Notes Frontend (Astro)
 
-```sh
-npm create astro@latest -- --template minimal
+Minimalistic, responsive notes UI built with Astro. Users can create, view, edit, and delete notes.  
+Layout: Sidebar (notes list) + Main content (editor). Light theme with a dark-mode toggle.
+
+## Features
+- Create a new note
+- Edit existing notes
+- View notes in a list
+- Delete notes
+- Responsive design (desktop and mobile)
+- Light theme, minimalistic styling with brand colors:
+  - primary: `#4f46e5`
+  - secondary: `#64748b`
+  - accent: `#fbbf24`
+
+## Run locally
+```bash
+npm install
+npm run dev
 ```
 
-[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/withastro/astro/tree/latest/examples/minimal)
-[![Open with CodeSandbox](https://assets.codesandbox.io/github/button-edit-lime.svg)](https://codesandbox.io/p/sandbox/github/withastro/astro/tree/latest/examples/minimal)
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/withastro/astro?devcontainer_path=.devcontainer/minimal/devcontainer.json)
+Open the URL shown in the terminal (typically http://localhost:3000).
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
+## Backend API configuration
+This frontend expects a backend exposing a simple Notes REST API:
+- GET    /notes
+- GET    /notes/:id
+- POST   /notes
+- PUT    /notes/:id
+- DELETE /notes/:id
 
-## 🚀 Project Structure
+Set the backend URL in your `.env` file:
 
-Inside of your Astro project, you'll see the following folders and files:
-
-```text
-/
-├── public/
-├── src/
-│   └── pages/
-│       └── index.astro
-└── package.json
+```env
+PUBLIC_API_BASE_URL=http://localhost:8000
 ```
 
-Astro looks for `.astro` or `.md` files in the `src/pages/` directory. Each page is exposed as a route based on its file name.
+See `.env.example` for a sample.  
+If this variable is not provided, the UI falls back to localStorage so you can still try the app without a backend.
 
-There's nothing special about `src/components/`, but that's where we like to put any Astro/React/Vue/Svelte/Preact components.
+## Scripts
+- `npm run dev` - Start the dev server
+- `npm run build` - Build for production (output: `dist/`)
+- `npm run preview` - Preview the built site
+- `npm run lint` - Run ESLint
 
-Any static assets, like images, can be placed in the `public/` directory.
+## Project structure
+```
+notes_frontend/
+├─ src/
+│  ├─ components/
+│  │  ├─ NotesApp.astro
+│  │  └─ ThemeToggle.astro
+│  ├─ layouts/
+│  │  └─ Layout.astro
+│  ├─ lib/
+│  │  └─ api.ts
+│  └─ pages/
+│     └─ index.astro
+└─ .env.example
+```
 
-## 🧞 Commands
+## Accessibility
+- Keyboard navigation for note selection
+- ARIA labels on lists and controls
+- Reduced motion on quick feedback; status messages use `aria-live`
 
-All commands are run from the root of the project, from a terminal:
-
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `npm install`             | Installs dependencies                            |
-| `npm run dev`             | Starts local dev server at `localhost:4321`      |
-| `npm run build`           | Build your production site to `./dist/`          |
-| `npm run preview`         | Preview your build locally, before deploying     |
-| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `npm run astro -- --help` | Get help using the Astro CLI                     |
-
-## 👀 Want to learn more?
-
-Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).
+## License
+MIT
